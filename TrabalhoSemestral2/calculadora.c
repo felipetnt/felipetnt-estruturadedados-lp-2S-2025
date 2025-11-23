@@ -3,284 +3,459 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
-#include "calculadora.h"
+#include "expressao.h"
 
 #define M_PI 3.14159265358979323846
 
-// ---------- Funções auxiliares internas ----------
-
-char *duplicarString(const char *origem){
-    if(!origem) return NULL;
-    size_t tamanho = strlen(origem);
-    char *nova = (char*)malloc(tamanho + 1);
-    if(!nova) return NULL;
-    memcpy(nova, origem, tamanho + 1);
-    return nova;
-}
-
-int tokenEhNumero(const char *token){
-    if(!token || *token=='\0') return 0;
-
-    char buffer[256];
-    strncpy(buffer, token, 255);
-    buffer[255] = 0;
-
-    // Troca vírgula por ponto
-    int i;
-    for(i=0; buffer[i]; i++)
-        if(buffer[i] == ',')
-            buffer[i] = '.';
-
-    char *fim;
-    strtod(buffer, &fim);
-
-    return (fim != buffer && *fim=='\0');
-}
-
-int tokenEhOperadorBinario(const char *token){
-    return strlen(token)==1 && 
-        (token[0]=='+'||token[0]=='-'||token[0]=='*'||
-         token[0]=='/'||token[0]=='%'||token[0]=='^');
-}
-
-void converterParaMinusculo(char *s){
-    int i;
-    for(i=0; s[i]; i++)
-        s[i] = (char)tolower((unsigned char)s[i]);
-}
-
-int tokenEhFuncaoUnaria(const char *token){
-    char buffer[16];
-    strncpy(buffer, token, 15);
-    buffer[15] = 0;
-    converterParaMinusculo(buffer);
-
-    return !strcmp(buffer,"sen") || !strcmp(buffer,"cos") ||
-           !strcmp(buffer,"tg")  || !strcmp(buffer,"log") ||
-           !strcmp(buffer,"raiz");
-}
-
-int aplicarOperadorBinario(char operador, double a, double b, double *resultado){
-    switch(operador){
-        case '+': *resultado = a+b; return 1;
-        case '-': *resultado = a-b; return 1;
-        case '*': *resultado = a*b; return 1;
-        case '/': if(b == 0) return 0; *resultado = a/b; return 1;
-        case '%': if(b == 0) return 0; *resultado = fmod(a,b); return 1;
-        case '^': *resultado = pow(a,b); return 1;
-    }
-    return 0;
-}
-
-int aplicarFuncaoUnaria(const char *funcao, double valor, double *resultado){
-    char buffer[16];
-    strncpy(buffer, funcao, 15);
-    buffer[15] = 0;
-    converterParaMinusculo(buffer);
-
-    if(!strcmp(buffer,"sen")){
-        *resultado = sin(valor*M_PI/180.0);
-        return 1;
-    }
-    if(!strcmp(buffer,"cos")){
-        *resultado = cos(valor*M_PI/180.0);
-        return 1;
-    }
-    if(!strcmp(buffer,"tg")){
-        double c = cos(valor*M_PI/180.0);
-        if(fabs(c) < 1e-12) return 0;
-        *resultado = tan(valor*M_PI/180.0);
-        return 1;
-    }
-    if(!strcmp(buffer,"log")){
-        if(valor <= 0) return 0;
-        *resultado = log10(valor);
-        return 1;
-    }
-    if(!strcmp(buffer,"raiz")){
-        if(valor < 0) return 0;
-        *resultado = sqrt(valor);
-        return 1;
-    }
-
-    return 0;
-}
-
-// -----------------------------------------------------------
-//               CONVERSÃO: POSFIXA → INFIXA
-// -----------------------------------------------------------
-
-char * getFormaInFixa(char *expressaoPosfixa){
-    if(!expressaoPosfixa) return NULL;
-
-    char *copia = duplicarString(expressaoPosfixa);
-    if(!copia) return NULL;
-
-    char **pilhaStrings = malloc(sizeof(char*) * 64);
-    if(!pilhaStrings){ free(copia); return NULL; }
-
-    int topo = 0;
-    int capacidade = 64;
-    int erro = 0;
-
-    char *token = strtok(copia, " \t\r\n");
-
-    while(token && !erro){
-
-        if(tokenEhNumero(token)){
-            char *numero = duplicarString(token);
-            if(!numero){ erro = 1; break; }
-
-            if(topo >= capacidade){
-                capacidade *= 2;
-                char **novaPilha = realloc(pilhaStrings, sizeof(char*)*capacidade);
-                if(!novaPilha){ free(numero); erro = 1; break; }
-                pilhaStrings = novaPilha;
-            }
-
-            pilhaStrings[topo++] = numero;
-        }
-
-        else if(tokenEhOperadorBinario(token)){
-            if(topo < 2){ erro = 1; break; }
-
-            char *direito = pilhaStrings[--topo];
-            char *esquerdo = pilhaStrings[--topo];
-
-            size_t tamanhoNovo = strlen(esquerdo) + strlen(direito) + 4;
-            char *novaExpressao = malloc(tamanhoNovo + 1);
-            if(!novaExpressao){ free(esquerdo); free(direito); erro=1; break; }
-
-            sprintf(novaExpressao, "(%s%c%s)", esquerdo, token[0], direito);
-
-            free(esquerdo);
-            free(direito);
-
-            pilhaStrings[topo++] = novaExpressao;
-        }
-
-        else if(tokenEhFuncaoUnaria(token)){
-            if(topo < 1){ erro = 1; break; }
-
-            char *argumento = pilhaStrings[--topo];
-
-            char funcaoLower[32];
-            strncpy(funcaoLower, token, 31);
-            funcaoLower[31] = 0;
-            converterParaMinusculo(funcaoLower);
-
-            size_t tamanhoNovo = strlen(funcaoLower) + strlen(argumento) + 3;
-            char *novaExpressao = malloc(tamanhoNovo);
-            if(!novaExpressao){ free(argumento); erro = 1; break; }
-
-            sprintf(novaExpressao, "%s(%s)", funcaoLower, argumento);
-
-            free(argumento);
-
-            pilhaStrings[topo++] = novaExpressao;
-        }
-
-        else {
-            erro = 1;
-        }
-
-        token = strtok(NULL, " \t\r\n");
-    }
-
-    free(copia);
-    
-    if(erro || topo != 1){
-        for(int i=0; i<topo; i++)
-            free(pilhaStrings[i]);
-        free(pilhaStrings);
-        return NULL;
-    }
-
-    char *resultado = pilhaStrings[0];
-    free(pilhaStrings);
+char *duplicarString(const char *texto){
+    if(!texto) return NULL;
+    size_t tamanho = strlen(texto);
+    char *resultado = malloc(tamanho + 1);
+    if(!resultado) return NULL;
+    memcpy(resultado, texto, tamanho + 1);
     return resultado;
 }
 
-// -----------------------------------------------------------
-//               AVALIAÇÃO DE EXPRESSÃO POS-FIXA
-// -----------------------------------------------------------
+int ehOperador(char c){
+    return c=='+' || c=='-' || c=='*' || c=='/' || c=='%' || c=='^';
+}
 
+int ehLetra(char c){
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+int ehDigitoOuPonto(char c){
+    return (c >= '0' && c <= '9') || c == '.';
+}
+
+char *lerToken(const char *texto, int *posicao){
+    int tamanho = (int)strlen(texto);
+
+    while(*posicao < tamanho && isspace((unsigned char)texto[*posicao]))
+        (*posicao)++;
+
+    if(*posicao >= tamanho) return NULL;
+
+    // número (positivo ou negativo)
+    if(ehDigitoOuPonto(texto[*posicao]) ||
+       (texto[*posicao]=='-' && *posicao+1 < tamanho && ehDigitoOuPonto(texto[*posicao+1]))){
+        
+        int inicio = *posicao;
+        if(texto[inicio] == '-') inicio++;
+
+        while(inicio < tamanho && ehDigitoOuPonto(texto[inicio])) inicio++;
+
+        int comprimento = inicio - *posicao;
+        char *token = malloc(comprimento + 1);
+        if(!token) return NULL;
+
+        memcpy(token, texto + *posicao, comprimento);
+        token[comprimento] = 0;
+
+        *posicao = inicio;
+        return token;
+    }
+
+    // palavra (função)
+    if(ehLetra(texto[*posicao])){
+        int inicio = *posicao;
+        while(inicio < tamanho && ehLetra(texto[inicio])) inicio++;
+
+        int comprimento = inicio - *posicao;
+        char *token = malloc(comprimento + 1);
+        if(!token) return NULL;
+
+        for(int i = 0; i < comprimento; i++)
+            token[i] = (char)tolower((unsigned char)texto[*posicao + i]);
+
+        token[comprimento] = 0;
+        *posicao = inicio;
+        return token;
+    }
+
+    // operadores
+    if(ehOperador(texto[*posicao])){
+        char temp[2];
+        temp[0] = texto[*posicao];
+        temp[1] = 0;
+        (*posicao)++;
+        return duplicarString(temp);
+    }
+
+    (*posicao)++;
+    return NULL;
+}
+
+/* ---------- INFIXA → POSFIXA ----------- */
+char *converterInfixaParaPosfixa(char *expressaoInfixa){
+    if(!expressaoInfixa) return NULL;
+
+    char saida[1024];
+    saida[0]=0;
+
+    int n = (int)strlen(expressaoInfixa);
+
+    /* pilha de operadores e funções (strings) */
+    int capacidadePilha = 64;
+    char **pilhaOp = malloc(sizeof(char*) * capacidadePilha);
+    if(!pilhaOp) return NULL;
+    int topo = 0;
+
+    int i = 0;
+    while(i < n){
+        if(isspace((unsigned char)expressaoInfixa[i])){ i++; continue; }
+
+        /* número (com ponto ou negativo) */
+        if(ehDigitoOuPonto(expressaoInfixa[i]) || (expressaoInfixa[i]=='-' && i+1<n && ehDigitoOuPonto(expressaoInfixa[i+1]))){
+            char num[128]; int p = 0;
+            if(expressaoInfixa[i]=='-') num[p++] = expressaoInfixa[i++];
+            while(i<n && ehDigitoOuPonto(expressaoInfixa[i])) num[p++] = expressaoInfixa[i++];
+            num[p]=0;
+            if(saida[0]) strcat(saida," ");
+            strcat(saida,num);
+            continue;
+        }
+
+        /* nome (função) */
+        if(ehLetra(expressaoInfixa[i])){
+            char nome[64]; int p = 0;
+            while(i<n && ehLetra(expressaoInfixa[i])) nome[p++] = (char)tolower((unsigned char)expressaoInfixa[i++]);
+            nome[p]=0;
+            /* empilha a função (não coloca no output) */
+            if(topo >= capacidadePilha){
+                capacidadePilha *= 2;
+                char **tmp = realloc(pilhaOp, sizeof(char*) * capacidadePilha);
+                if(!tmp){ for(int k=0;k<topo;k++) free(pilhaOp[k]); free(pilhaOp); return NULL; }
+                pilhaOp = tmp;
+            }
+            pilhaOp[topo++] = duplicarString(nome);
+            continue;
+        }
+
+        /* '(' */
+        if(expressaoInfixa[i] == '('){
+            if(topo >= capacidadePilha){
+                capacidadePilha *= 2;
+                char **tmp = realloc(pilhaOp, sizeof(char*) * capacidadePilha);
+                if(!tmp){ for(int k=0;k<topo;k++) free(pilhaOp[k]); free(pilhaOp); return NULL; }
+                pilhaOp = tmp;
+            }
+            pilhaOp[topo++] = duplicarString("(");
+            i++;
+            continue;
+        }
+
+        /* ')' */
+        if(expressaoInfixa[i] == ')'){
+            while(topo > 0 && strcmp(pilhaOp[topo-1], "(") != 0){
+                if(saida[0]) strcat(saida," ");
+                strcat(saida, pilhaOp[topo-1]);
+                free(pilhaOp[--topo]);
+            }
+            if(topo > 0 && strcmp(pilhaOp[topo-1], "(") == 0){
+                free(pilhaOp[--topo]); /* remove '(' */
+            }
+            /* se o topo agora for uma função, pop para saída */
+            if(topo > 0 && ehLetra(pilhaOp[topo-1][0])){
+                if(saida[0]) strcat(saida," ");
+                strcat(saida, pilhaOp[topo-1]);
+                free(pilhaOp[--topo]);
+            }
+            i++;
+            continue;
+        }
+
+        /* operador */
+        if(ehOperador(expressaoInfixa[i])){
+            char opAtual = expressaoInfixa[i];
+            int prAtual = (opAtual=='+'||opAtual=='-')?1:((opAtual=='*'||opAtual=='/'||opAtual=='%')?2:3);
+
+            while(topo > 0){
+                char *topToken = pilhaOp[topo-1];
+                /* se topo é operador de um caractere */
+                if(strlen(topToken) == 1 && ehOperador(topToken[0]) && strcmp(topToken,"(")!=0){
+                    char opTopo = topToken[0];
+                    int prTopo = (opTopo=='+'||opTopo=='-')?1:((opTopo=='*'||opTopo=='/'||opTopo=='%')?2:3);
+                    if( (prTopo > prAtual) || (prTopo == prAtual && opAtual != '^') ){
+                        if(saida[0]) strcat(saida," ");
+                        strcat(saida, topToken);
+                        free(pilhaOp[--topo]);
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            if(topo >= capacidadePilha){
+                capacidadePilha *= 2;
+                char **tmp = realloc(pilhaOp, sizeof(char*) * capacidadePilha);
+                if(!tmp){ for(int k=0;k<topo;k++) free(pilhaOp[k]); free(pilhaOp); return NULL; }
+                pilhaOp = tmp;
+            }
+            char opStr[2] = { opAtual, 0 };
+            pilhaOp[topo++] = duplicarString(opStr);
+            i++;
+            continue;
+        }
+
+        /* caractere ignorado */
+        i++;
+    }
+
+    /* esvazia pilha */
+    while(topo > 0){
+        if(strcmp(pilhaOp[topo-1], "(") == 0){
+            free(pilhaOp[--topo]); /* parêntese sobrando -> erro tolerado */
+            continue;
+        }
+        if(saida[0]) strcat(saida," ");
+        strcat(saida, pilhaOp[topo-1]);
+        free(pilhaOp[--topo]);
+    }
+
+    free(pilhaOp);
+    return duplicarString(saida);
+}
+
+/* ---------- AVALIAÇÃO POSFIXA ----------- */
 float getValorPosFixa(char *expressaoPosfixa){
     if(!expressaoPosfixa) return NAN;
 
-    char *copia = duplicarString(expressaoPosfixa);
-    if(!copia) return NAN;
-
-    double *pilhaValores = malloc(sizeof(double) * 64);
-    if(!pilhaValores){ free(copia); return NAN; }
-
-    int topo = 0;
+    int pos = 0;
     int capacidade = 64;
-    int erro = 0;
+    int qtdTokens = 0;
 
-    char *token = strtok(copia, " \t\r\n");
+    char **tokens = malloc(sizeof(char*) * capacidade);
+    if(!tokens) return NAN;
 
-    while(token && !erro){
+    /* --- separar tokens --- */
+    while(1){
+        char *token = lerToken(expressaoPosfixa, &pos);
+        if(!token) break;
 
-        char buffer[256];
-        strncpy(buffer, token, 255);
-        buffer[255] = 0;
+        tokens[qtdTokens++] = token;
 
-        for(int i=0; buffer[i]; i++)
-            if(buffer[i] == ',')
-                buffer[i] = '.';
+        if(qtdTokens >= capacidade){
+            capacidade *= 2;
+            tokens = realloc(tokens, sizeof(char*) * capacidade);
+            if(!tokens) return NAN;
+        }
+    }
 
-        char *fim;
-        double numero = strtod(buffer, &fim);
+    double pilha[512];
+    int topo = 0;
 
-        if(fim != buffer && *fim == '\0'){
-            if(topo >= capacidade){
-                capacidade *= 2;
-                double *nova = realloc(pilhaValores, sizeof(double)*capacidade);
-                if(!nova){ erro = 1; break; }
-                pilhaValores = nova;
+    /* --- avaliação da pós-fixa --- */
+    for(int i = 0; i < qtdTokens; i++){
+        char *token = tokens[i];
+
+        /* número */
+        if(ehDigitoOuPonto(token[0]) || (token[0]=='-' && strlen(token)>1)){
+            pilha[topo++] = strtod(token, NULL);
+            continue;
+        }
+
+        /* operador binário */
+        if(strlen(token)==1 && ehOperador(token[0])){
+            if(topo < 2){
+                for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                free(tokens);
+                return NAN;
             }
-            pilhaValores[topo++] = numero;
+
+            double b = pilha[--topo];
+            double a = pilha[--topo];
+            double r = 0;
+
+            switch(token[0]){
+                case '+': r = a + b; break;
+                case '-': r = a - b; break;
+                case '*': r = a * b; break;
+                case '/':
+                    if(b == 0){
+                        for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                        free(tokens);
+                        return NAN;
+                    }
+                    r = a / b;
+                    break;
+                case '%':
+                    if(b == 0){
+                        for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                        free(tokens);
+                        return NAN;
+                    }
+                    r = fmod(a, b);
+                    break;
+                case '^': r = pow(a, b); break;
+            }
+
+            pilha[topo++] = r;
+            continue;
         }
 
-        else if(tokenEhOperadorBinario(token)){
-            if(topo < 2){ erro = 1; break; }
-
-            double b = pilhaValores[--topo];
-            double a = pilhaValores[--topo];
-            double r;
-
-            if(!aplicarOperadorBinario(token[0], a, b, &r)){ erro = 1; break; }
-
-            pilhaValores[topo++] = r;
+        /* função unária */
+        if(topo < 1){
+            for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+            free(tokens);
+            return NAN;
         }
 
-        else if(tokenEhFuncaoUnaria(token)){
-            if(topo < 1){ erro = 1; break; }
+        double a = pilha[--topo];
+        double r = 0;
+        char func[64];
 
-            double a = pilhaValores[--topo];
-            double r;
+        strncpy(func, token, 63);
+        func[63] = 0;
 
-            if(!aplicarFuncaoUnaria(token, a, &r)){ erro = 1; break; }
+        for(int k=0; func[k]; k++)
+            func[k] = (char)tolower((unsigned char)func[k]);
 
-            pilhaValores[topo++] = r;
+        if(strcmp(func,"sen")==0)
+            r = sin(a * M_PI / 180.0);
+        else if(strcmp(func,"cos")==0)
+            r = cos(a * M_PI / 180.0);
+        else if(strcmp(func,"tg")==0){
+            double c = cos(a * M_PI / 180.0);
+            if(fabs(c) < 1e-12){
+                for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                free(tokens);
+                return NAN;
+            }
+            r = tan(a * M_PI / 180.0);
         }
-
+        else if(strcmp(func,"log")==0){
+            if(a <= 0){
+                for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                free(tokens);
+                return NAN;
+            }
+            r = log10(a);
+        }
+        else if(strcmp(func,"raiz")==0){
+            if(a < 0){
+                for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+                free(tokens);
+                return NAN;
+            }
+            r = sqrt(a);
+        }
         else {
-            erro = 1;
+            for(int j=0;j<qtdTokens;j++) free(tokens[j]);
+            free(tokens);
+            return NAN;
         }
 
-        token = strtok(NULL, " \t\r\n");
+        pilha[topo++] = r;
     }
 
-    free(copia);
+    /* liberar memória */
+    for(int j = 0; j < qtdTokens; j++) free(tokens[j]);
+    free(tokens);
 
-    if(erro || topo != 1){
-        free(pilhaValores);
-        return NAN;
+    /* retorno correto → TOPO DA PILHA */
+    if(topo != 1) return NAN;
+
+    return (float) pilha[topo - 1];  // AQUI estava o erro antes
+}
+
+/* ---------- POSFIXA → INFIXA ----------- */
+char *getFormaInFixa(char *posfixa){
+    // mesma lógica, só nomes melhores
+    int pos = 0, cap = 64, qtd = 0;
+    char **tokens = malloc(sizeof(char*) * cap);
+    if(!tokens) return NULL;
+
+    while(1){
+        char *t = lerToken(posfixa, &pos);
+        if(!t) break;
+        tokens[qtd++] = t;
+        if(qtd >= cap){
+            cap *= 2;
+            tokens = realloc(tokens, sizeof(char*) * cap);
+        }
     }
 
-    float resultado = (float)pilhaValores[0];
-    free(pilhaValores);
+    typedef struct {
+        char *str;
+        int precedencia;
+    } NoExpressao;
+
+    NoExpressao *pilha = malloc(sizeof(NoExpressao) * 512);
+    int topo = 0;
+
+    for(int i = 0; i < qtd; i++){
+        char *t = tokens[i];
+
+        if(ehDigitoOuPonto(t[0]) || (t[0]=='-' && strlen(t)>1)){
+            pilha[topo].str = duplicarString(t);
+            pilha[topo].precedencia = 100;
+            topo++;
+            continue;
+        }
+
+        if(strlen(t)==1 && ehOperador(t[0])){
+            NoExpressao direita = pilha[--topo];
+            NoExpressao esquerda = pilha[--topo];
+
+            int prioridade =
+                (t[0]=='+'||t[0]=='-') ? 1 :
+                (t[0]=='*'||t[0]=='/'||t[0]=='%') ? 2 : 3;
+
+            int precisaParentesesEsq = esquerda.precedencia < prioridade;
+            int precisaParentesesDir =
+                direita.precedencia < prioridade ||
+                (direita.precedencia == prioridade && t[0] != '^');
+
+            size_t tamanho =
+                strlen(esquerda.str) + strlen(direita.str) + 8 +
+                (precisaParentesesEsq?2:0) + (precisaParentesesDir?2:0);
+
+            char *nova = malloc(tamanho);
+            nova[0] = 0;
+
+            if(precisaParentesesEsq) strcat(nova,"(");
+            strcat(nova, esquerda.str);
+            if(precisaParentesesEsq) strcat(nova,")");
+
+            size_t posNova = strlen(nova);
+            nova[posNova] = t[0];
+            nova[posNova+1] = 0;
+
+            if(precisaParentesesDir) strcat(nova,"(");
+            strcat(nova, direita.str);
+            if(precisaParentesesDir) strcat(nova,")");
+
+            free(esquerda.str);
+            free(direita.str);
+
+            pilha[topo].str = nova;
+            pilha[topo].precedencia = prioridade;
+            topo++;
+            continue;
+        }
+
+        // função
+        NoExpressao arg = pilha[--topo];
+
+        size_t tamanho = strlen(t) + strlen(arg.str) + 4;
+        char *nova = malloc(tamanho);
+
+        sprintf(nova, "%s(%s)", t, arg.str);
+
+        free(arg.str);
+
+        pilha[topo].str = nova;
+        pilha[topo].precedencia = 4;
+        topo++;
+    }
+
+    char *resultado = pilha[0].str;
+    free(pilha);
+
+    for(int j = 0; j < qtd; j++)
+        free(tokens[j]);
+    free(tokens);
+
     return resultado;
 }
