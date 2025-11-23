@@ -5,7 +5,9 @@
 #include <math.h>
 #include "expressao.h"
 
+#ifndef M_PI
 #define M_PI 3.14159265358979323846
+#endif
 
 char *duplicarString(const char *texto){
     if(!texto) return NULL;
@@ -28,6 +30,13 @@ int ehDigitoOuPonto(char c){
     return (c >= '0' && c <= '9') || c == '.';
 }
 
+void substituirVirgulaPorPonto(char *texto){
+    if(!texto) return;
+    for(int i = 0; texto[i]; i++){
+        if(texto[i] == ',') texto[i] = '.';
+    }
+}
+
 char *lerToken(const char *texto, int *posicao){
     int tamanho = (int)strlen(texto);
 
@@ -36,7 +45,6 @@ char *lerToken(const char *texto, int *posicao){
 
     if(*posicao >= tamanho) return NULL;
 
-    // número (positivo ou negativo)
     if(ehDigitoOuPonto(texto[*posicao]) ||
        (texto[*posicao]=='-' && *posicao+1 < tamanho && ehDigitoOuPonto(texto[*posicao+1]))){
         
@@ -56,7 +64,6 @@ char *lerToken(const char *texto, int *posicao){
         return token;
     }
 
-    // palavra (função)
     if(ehLetra(texto[*posicao])){
         int inicio = *posicao;
         while(inicio < tamanho && ehLetra(texto[inicio])) inicio++;
@@ -73,7 +80,6 @@ char *lerToken(const char *texto, int *posicao){
         return token;
     }
 
-    // operadores
     if(ehOperador(texto[*posicao])){
         char temp[2];
         temp[0] = texto[*posicao];
@@ -90,12 +96,13 @@ char *lerToken(const char *texto, int *posicao){
 char *converterInfixaParaPosfixa(char *expressaoInfixa){
     if(!expressaoInfixa) return NULL;
 
+    substituirVirgulaPorPonto(expressaoInfixa);
+
     char saida[1024];
     saida[0]=0;
 
     int n = (int)strlen(expressaoInfixa);
 
-    /* pilha de operadores e funções (strings) */
     int capacidadePilha = 64;
     char **pilhaOp = malloc(sizeof(char*) * capacidadePilha);
     if(!pilhaOp) return NULL;
@@ -105,7 +112,6 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
     while(i < n){
         if(isspace((unsigned char)expressaoInfixa[i])){ i++; continue; }
 
-        /* número (com ponto ou negativo) */
         if(ehDigitoOuPonto(expressaoInfixa[i]) || (expressaoInfixa[i]=='-' && i+1<n && ehDigitoOuPonto(expressaoInfixa[i+1]))){
             char num[128]; int p = 0;
             if(expressaoInfixa[i]=='-') num[p++] = expressaoInfixa[i++];
@@ -116,12 +122,10 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
             continue;
         }
 
-        /* nome (função) */
         if(ehLetra(expressaoInfixa[i])){
             char nome[64]; int p = 0;
             while(i<n && ehLetra(expressaoInfixa[i])) nome[p++] = (char)tolower((unsigned char)expressaoInfixa[i++]);
             nome[p]=0;
-            /* empilha a função (não coloca no output) */
             if(topo >= capacidadePilha){
                 capacidadePilha *= 2;
                 char **tmp = realloc(pilhaOp, sizeof(char*) * capacidadePilha);
@@ -132,7 +136,6 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
             continue;
         }
 
-        /* '(' */
         if(expressaoInfixa[i] == '('){
             if(topo >= capacidadePilha){
                 capacidadePilha *= 2;
@@ -145,7 +148,6 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
             continue;
         }
 
-        /* ')' */
         if(expressaoInfixa[i] == ')'){
             while(topo > 0 && strcmp(pilhaOp[topo-1], "(") != 0){
                 if(saida[0]) strcat(saida," ");
@@ -153,9 +155,8 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
                 free(pilhaOp[--topo]);
             }
             if(topo > 0 && strcmp(pilhaOp[topo-1], "(") == 0){
-                free(pilhaOp[--topo]); /* remove '(' */
+                free(pilhaOp[--topo]);
             }
-            /* se o topo agora for uma função, pop para saída */
             if(topo > 0 && ehLetra(pilhaOp[topo-1][0])){
                 if(saida[0]) strcat(saida," ");
                 strcat(saida, pilhaOp[topo-1]);
@@ -165,14 +166,12 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
             continue;
         }
 
-        /* operador */
         if(ehOperador(expressaoInfixa[i])){
             char opAtual = expressaoInfixa[i];
             int prAtual = (opAtual=='+'||opAtual=='-')?1:((opAtual=='*'||opAtual=='/'||opAtual=='%')?2:3);
 
             while(topo > 0){
                 char *topToken = pilhaOp[topo-1];
-                /* se topo é operador de um caractere */
                 if(strlen(topToken) == 1 && ehOperador(topToken[0]) && strcmp(topToken,"(")!=0){
                     char opTopo = topToken[0];
                     int prTopo = (opTopo=='+'||opTopo=='-')?1:((opTopo=='*'||opTopo=='/'||opTopo=='%')?2:3);
@@ -198,14 +197,12 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
             continue;
         }
 
-        /* caractere ignorado */
         i++;
     }
 
-    /* esvazia pilha */
     while(topo > 0){
         if(strcmp(pilhaOp[topo-1], "(") == 0){
-            free(pilhaOp[--topo]); /* parêntese sobrando -> erro tolerado */
+            free(pilhaOp[--topo]);
             continue;
         }
         if(saida[0]) strcat(saida," ");
@@ -221,6 +218,8 @@ char *converterInfixaParaPosfixa(char *expressaoInfixa){
 float getValorPosFixa(char *expressaoPosfixa){
     if(!expressaoPosfixa) return NAN;
 
+    substituirVirgulaPorPonto(expressaoPosfixa);
+
     int pos = 0;
     int capacidade = 64;
     int qtdTokens = 0;
@@ -228,7 +227,6 @@ float getValorPosFixa(char *expressaoPosfixa){
     char **tokens = malloc(sizeof(char*) * capacidade);
     if(!tokens) return NAN;
 
-    /* --- separar tokens --- */
     while(1){
         char *token = lerToken(expressaoPosfixa, &pos);
         if(!token) break;
@@ -245,17 +243,14 @@ float getValorPosFixa(char *expressaoPosfixa){
     double pilha[512];
     int topo = 0;
 
-    /* --- avaliação da pós-fixa --- */
     for(int i = 0; i < qtdTokens; i++){
         char *token = tokens[i];
 
-        /* número */
         if(ehDigitoOuPonto(token[0]) || (token[0]=='-' && strlen(token)>1)){
             pilha[topo++] = strtod(token, NULL);
             continue;
         }
 
-        /* operador binário */
         if(strlen(token)==1 && ehOperador(token[0])){
             if(topo < 2){
                 for(int j=0;j<qtdTokens;j++) free(tokens[j]);
@@ -294,7 +289,6 @@ float getValorPosFixa(char *expressaoPosfixa){
             continue;
         }
 
-        /* função unária */
         if(topo < 1){
             for(int j=0;j<qtdTokens;j++) free(tokens[j]);
             free(tokens);
@@ -349,19 +343,20 @@ float getValorPosFixa(char *expressaoPosfixa){
         pilha[topo++] = r;
     }
 
-    /* liberar memória */
     for(int j = 0; j < qtdTokens; j++) free(tokens[j]);
     free(tokens);
 
-    /* retorno correto → TOPO DA PILHA */
     if(topo != 1) return NAN;
 
-    return (float) pilha[topo - 1];  // AQUI estava o erro antes
+    return (float) pilha[topo - 1];
 }
 
 /* ---------- POSFIXA → INFIXA ----------- */
 char *getFormaInFixa(char *posfixa){
-    // mesma lógica, só nomes melhores
+    if(!posfixa) return NULL;
+
+    substituirVirgulaPorPonto(posfixa);
+
     int pos = 0, cap = 64, qtd = 0;
     char **tokens = malloc(sizeof(char*) * cap);
     if(!tokens) return NULL;
@@ -435,7 +430,6 @@ char *getFormaInFixa(char *posfixa){
             continue;
         }
 
-        // função
         NoExpressao arg = pilha[--topo];
 
         size_t tamanho = strlen(t) + strlen(arg.str) + 4;
