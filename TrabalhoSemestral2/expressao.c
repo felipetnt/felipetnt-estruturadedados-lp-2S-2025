@@ -1,16 +1,10 @@
-/* expressao.c
- *
- * Implementação compatível com expressao.h
- * - assinatura pública: int processarExpressao(const char *entrada, char **saida, float *valor, int *ehPos)
- * - retorno: *saida é malloc'd (caller deve free). Em erro retorna -1.
- * - compatível C90 (sem declarar variáveis dentro do for)
- * - não usa math.h nem -lm (funções aproximadas em float)
- */
+/* expressao.c - implementação compatível com expressao.h (sem -lm) */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "expressao.h"
 
@@ -18,7 +12,6 @@
 #define MAXTOKENS 1024
 #define MAXTOKENLEN 128
 
-/* protótipos internos */
 char *normalizarInfixa(const char *expr);
 char *infixaParaPosfixaInterna(const char *infixa_tokens); /* retorna malloc */
 char *converterPosfixaParaInfixaInterna(const char *posfixa_tokens); /* retorna malloc */
@@ -30,6 +23,8 @@ int precedenciaToken(const char *tok);
 int detectarPosfixa(const char *entrada);
 int detectaPosFixa(const char *entrada);
 
+static char *minha_strdup(const char *s);
+
 float senoAprox(float graus);
 float cossenoAprox(float graus);
 float tangenteAprox(float graus);
@@ -38,19 +33,106 @@ float lnAprox(float x);
 float log10Aprox(float x);
 float aplicarFuncaoUnaria(const char *func, float x);
 
-/* ---------- pilha de floats ---------- */
+static int tem_par_externa(const char *s) {
+    if (!s) return 0;
+    if (s[0] != '(') return 0;
+    int nivel = 0;
+    size_t i;
+    size_t L = strlen(s);
+    for (i = 0; i < L; ++i) {
+        if (s[i] == '(') ++nivel;
+        else if (s[i] == ')') {
+            --nivel;
+            if (nivel == 0 && i < L - 1) return 0;
+        }
+    }
+    return (nivel == 0) ? 1 : 0;
+}
+
+static char top_level_high_op(const char *t) {
+    if (!t) return 0;
+    int n = 0; size_t j;
+    for (j = 0; t[j]; ++j) {
+        if (t[j] == '(') ++n;
+        else if (t[j] == ')') --n;
+        else if (n == 0) {
+            if (t[j] == '*' || t[j] == '/' || t[j] == '%' || t[j] == '^') return t[j];
+        }
+    }
+    return 0;
+}
+
+static int left_token_is_func_or_paren(const char *s) {
+    if (!s) return 0;
+    size_t i = 0;
+    while (s[i] && isspace((unsigned char)s[i])) i++;
+    if (!s[i]) return 0;
+    if (s[i] == '(') return 1;
+    if (isalpha((unsigned char)s[i])) return 1;
+    return 0;
+}
+
+static char *ajustar_parenteses_root(char *s) {
+    if (!s) return s;
+    size_t L = strlen(s);
+    int nivel = 0;
+    int pos = -1;
+    size_t i;
+    /* encontra o último '+' ou '-' em nível 0 (divide principal) */
+    for (i = 0; i < L; ++i) {
+        char c = s[i];
+        if (c == '(') ++nivel;
+        else if (c == ')') --nivel;
+        else if (nivel == 0 && (c == '+' || c == '-')) {
+            pos = (int)i; /* manter última ocorrência */
+        }
+    }
+    if (pos < 0) return s;
+    /* separa em dois lados */
+    char *esq = (char*)malloc(pos + 1);
+    if (!esq) return s;
+    memcpy(esq, s, pos);
+    esq[pos] = '\0';
+    char *dir = minha_strdup(s + pos + 1);
+    if (!dir) { free(esq); return s; }
+
+    char opLeft = top_level_high_op(esq);
+    char opRight = top_level_high_op(dir);
+
+    int need_left = (opLeft != 0) && !tem_par_externa(esq);
+    int need_right = (opRight != 0) && !tem_par_externa(dir);
+
+    if (opLeft == '^' && left_token_is_func_or_paren(esq)) need_left = 0;
+    if (opRight == '^' && left_token_is_func_or_paren(dir)) need_right = 0;
+
+    if (!need_left && !need_right) { free(esq); free(dir); return s; }
+
+    /* monta nova string */
+    size_t newlen = strlen(esq) + strlen(dir) + 3 + (need_left?2:0) + (need_right?2:0);
+    char *novo = (char*)malloc(newlen + 1);
+    if (!novo) { free(esq); free(dir); return s; }
+    novo[0] = '\0';
+    if (need_left) { strcat(novo, "("); strcat(novo, esq); strcat(novo, ")"); }
+    else strcat(novo, esq);
+    {
+        size_t p = strlen(novo);
+        novo[p] = s[pos];
+        novo[p+1] = '\0';
+    }
+    if (need_right) { strcat(novo, "("); strcat(novo, dir); strcat(novo, ")"); }
+    else strcat(novo, dir);
+
+    free(esq); free(dir); free(s);
+    return novo;
+}
+
 typedef struct {
     float itens[256];
     int topo;
 } PilhaFloat;
 
-static void inicializarPilhaFloat(PilhaFloat *p) { p->topo = -1; }
-static int pilhaFloatVazia(PilhaFloat *p) { return p->topo == -1; }
-static int pilhaFloatCheia(PilhaFloat *p) { return p->topo == 255; }
-static void empilharFloat(PilhaFloat *p, float v) { if (!pilhaFloatCheia(p)) p->itens[++(p->topo)] = v; }
-static float desempilharFloat(PilhaFloat *p) { if (!pilhaFloatVazia(p)) return p->itens[(p->topo)--]; return 0.0f; }
+static void inicializarPilhaFloat(PilhaFloat *p){p->topo=-1;} static int pilhaFloatVazia(PilhaFloat *p){return p->topo==-1;} static int pilhaFloatCheia(PilhaFloat *p){return p->topo==255;} static void empilharFloat(PilhaFloat *p,float v){if(!pilhaFloatCheia(p))p->itens[++(p->topo)]=v;} static float desempilharFloat(PilhaFloat *p){if(!pilhaFloatVazia(p))return p->itens[(p->topo)--];return 0.0f;}
 
-/* ---------- utilitários de token ---------- */
 int ehNumeroToken(const char *tok) {
     if (!tok || tok[0] == '\0') return 0;
     int i = 0;
@@ -92,7 +174,6 @@ int precedenciaToken(const char *tok) {
     return 0;
 }
 
-/* ---------- normalizar infixa -> tokens separados por espaço (malloc) ---------- */
 char *normalizarInfixa(const char *expr) {
     if (!expr) return NULL;
     size_t n = strlen(expr);
@@ -169,10 +250,9 @@ char *normalizarInfixa(const char *expr) {
     return out;
 }
 
-/* ---------- detectar se string (já tokenizada com espaços) é posfixa (simulação) ---------- */
 int detectarPosfixa(const char *entrada) {
     if (!entrada) return 0;
-    char *copia = strdup(entrada);
+    char *copia = minha_strdup(entrada);
     if (!copia) return 0;
     char *tok = strtok(copia, " ");
     int contador = 0;
@@ -196,7 +276,6 @@ int detectarPosfixa(const char *entrada) {
     return (valido && contador == 1) ? 1 : 0;
 }
 
-/* wrapper: detecta se entrada bruta é posfixa (sem parênteses, com espaços e válida) */
 int detectaPosFixa(const char *entrada) {
     if (!entrada) return 0;
     if (strchr(entrada, '(') || strchr(entrada, ')')) return 0;
@@ -206,18 +285,14 @@ int detectaPosFixa(const char *entrada) {
     return 0;
 }
 
-/* ---------- INFIXA -> POSFIXA (shunting-yard).
-   Retorna malloc'd string (tokens separados por espaço) ou NULL.
-   Observação: quando empilhamos operadores/funções, duplicamos o token (strdup)
-   para não referenciar buffer temporário. */
 char *infixaParaPosfixaInterna(const char *infixa_raw) {
     if (!infixa_raw) return NULL;
     char *norm = normalizarInfixa(infixa_raw);
     if (!norm) return NULL;
-    char *copia = strdup(norm);
+    char *copia = minha_strdup(norm);
     if (!copia) { free(norm); return NULL; }
 
-    /* pilha de operadores: armazenamos strdup(token) */
+    /* pilha de operadores */
     char **pilhaOp = (char**)malloc(sizeof(char*) * MAXTOKENS);
     if (!pilhaOp) { free(norm); free(copia); return NULL; }
     int topo = 0;
@@ -236,7 +311,7 @@ char *infixaParaPosfixaInterna(const char *infixa_raw) {
             strcpy(saida + j, token);
             j += (int)strlen(token);
         } else if (ehFuncaoToken(token)) {
-            pilhaOp[topo++] = strdup(token); /* duplica */
+            pilhaOp[topo++] = minha_strdup(token); /* duplica */
             if (!pilhaOp[topo-1]) { /* falha malloc */
                 /* cleanup */
                 int k;
@@ -245,7 +320,7 @@ char *infixaParaPosfixaInterna(const char *infixa_raw) {
                 return NULL;
             }
         } else if (strcmp(token, "(") == 0) {
-            pilhaOp[topo++] = strdup(token);
+            pilhaOp[topo++] = minha_strdup(token);
             if (!pilhaOp[topo-1]) {
                 int k;
                 for (k = topo-1; k >= 0; --k) free(pilhaOp[k]);
@@ -284,7 +359,7 @@ char *infixaParaPosfixaInterna(const char *infixa_raw) {
                 }
                 break;
             }
-            pilhaOp[topo++] = strdup(token);
+            pilhaOp[topo++] = minha_strdup(token);
             if (!pilhaOp[topo-1]) {
                 int k;
                 for (k = topo-1; k >= 0; --k) free(pilhaOp[k]);
@@ -315,152 +390,162 @@ char *infixaParaPosfixaInterna(const char *infixa_raw) {
     return saida;
 }
 
-/* ---------- POSFIXA -> INFIXA (construção com pilha de strings malloced) ---------- */
 char *converterPosfixaParaInfixaInterna(const char *posfixa_raw) {
     if (!posfixa_raw) return NULL;
-    char *copia = strdup(posfixa_raw);
+    char *copia = minha_strdup(posfixa_raw);
     if (!copia) return NULL;
+    /* Detecta parênteses externos envolvendo toda a entrada posfixa */
+    int wrap_final = 0;
+    {
+        size_t L = strlen(copia);
+        size_t s = 0;
+        while (s < L && isspace((unsigned char)copia[s])) s++;
+        size_t e = L;
+        while (e > s && isspace((unsigned char)copia[e-1])) e--;
+        if (e - s >= 2 && copia[s] == '(' && copia[e-1] == ')') {
+            /* copia substring [s+1, e-1) */
+            size_t newlen = e - s - 1;
+            char *tmp = (char*)malloc(newlen + 1);
+            if (tmp) {
+                memcpy(tmp, copia + s + 1, newlen - 1);
+                tmp[newlen - 1] = '\0';
+                free(copia);
+                copia = tmp;
+                wrap_final = 1;
+            }
+        }
+    }
 
-    char **pilha = (char**)malloc(sizeof(char*) * MAXTOKENS);
+    typedef struct {
+        char *str;
+        int prec;
+    } NoExpr;
+
+    NoExpr *pilha = (NoExpr*)malloc(sizeof(NoExpr) * MAXTOKENS);
     if (!pilha) { free(copia); return NULL; }
     int topo = 0;
 
     char *token = strtok(copia, " ");
     while (token) {
         if (ehNumeroToken(token)) {
-            pilha[topo] = (char*)malloc(strlen(token) + 1);
-            if (!pilha[topo]) { /* cleanup */ while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
-            strcpy(pilha[topo++], token);
+            pilha[topo].str = minha_strdup(token);
+            if (!pilha[topo].str) { while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
+            pilha[topo].prec = 100;
+            topo++;
         } else if (ehFuncaoToken(token)) {
-            if (topo < 1) { while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
-            char *arg = pilha[--topo];
+            if (topo < 1) { while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
+            char *arg = pilha[--topo].str;
             size_t len = strlen(token) + 1 + strlen(arg) + 3;
             char *novo = (char*)malloc(len);
-            if (!novo) { free(arg); while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
+            if (!novo) { free(arg); while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
             sprintf(novo, "%s(%s)", token, arg);
             free(arg);
-            pilha[topo++] = novo;
+            pilha[topo].str = novo;
+            pilha[topo].prec = 4;
+            topo++;
         } else if (ehOperadorToken(token)) {
-            if (topo < 2) { while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
-            char *b = pilha[--topo];
-            char *a = pilha[--topo];
-            size_t len = strlen(a) + strlen(b) + strlen(token) + 5;
+            if (topo < 2) { while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
+            char *b = pilha[--topo].str;
+            int precB = pilha[topo].prec;
+            char *a = pilha[--topo].str;
+            int precA = pilha[topo].prec;
+
+            int prioridade = (token[0] == '+' || token[0] == '-') ? 1 : ((token[0] == '*' || token[0] == '/' || token[0] == '%') ? 2 : 3);
+            int is_right_assoc = (token[0] == '^');
+
+            int precisaParEsq = (precA < prioridade) || (precA == prioridade && is_right_assoc);
+            int precisaParDir = (precB < prioridade) || (precB == prioridade && !is_right_assoc);
+
+            
+
+            size_t len = strlen(a) + strlen(b) + 5 + (precisaParEsq?2:0) + (precisaParDir?2:0);
             char *novo = (char*)malloc(len);
-            if (!novo) { free(a); free(b); while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
-            sprintf(novo, "(%s%s%s)", a, token, b);
+            if (!novo) { free(a); free(b); while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
+            novo[0] = '\0';
+            if (precisaParEsq) {
+                if (tem_par_externa(a)) {
+                    strcat(novo, a);
+                } else {
+                    strcat(novo, "(");
+                    strcat(novo, a);
+                    strcat(novo, ")");
+                }
+            } else {
+                strcat(novo, a);
+            }
+            {
+                size_t p = strlen(novo);
+                novo[p] = token[0];
+                novo[p+1] = '\0';
+            }
+            if (precisaParDir) {
+                if (tem_par_externa(b)) {
+                    strcat(novo, b);
+                } else {
+                    strcat(novo, "(");
+                    strcat(novo, b);
+                    strcat(novo, ")");
+                }
+            } else {
+                strcat(novo, b);
+            }
+
             free(a); free(b);
-            pilha[topo++] = novo;
+            pilha[topo].str = novo;
+            pilha[topo].prec = prioridade;
+            topo++;
         } else {
-            while (topo>0) free(pilha[--topo]);
+            while (topo>0) free(pilha[--topo].str);
             free(pilha); free(copia); return NULL;
         }
         token = strtok(NULL, " ");
     }
 
-    if (topo != 1) { while (topo>0) free(pilha[--topo]); free(pilha); free(copia); return NULL; }
-    char *res = strdup(pilha[0]);
-    free(pilha[0]);
+    if (topo != 1) { while (topo>0) free(pilha[--topo].str); free(pilha); free(copia); return NULL; }
+    char *res = minha_strdup(pilha[0].str);
+    free(pilha[0].str);
     free(pilha);
     free(copia);
 
-    /* remover parênteses externos correspondentes */
-    size_t L = strlen(res);
-    if (L >= 2 && res[0] == '(' && res[L-1] == ')') {
-        int nivel = 0;
-        int corresponde = 0;
-        size_t idx;
-        for (idx = 0; idx < L; ++idx) {
-            if (res[idx] == '(') ++nivel;
-            else if (res[idx] == ')') --nivel;
-            if (nivel == 0 && idx < L - 1) { corresponde = 0; break; }
-            if (idx == L-1 && nivel == 0) corresponde = 1;
-        }
-        if (corresponde) {
-            char *sem = (char*)malloc(L - 1);
-            if (sem) {
-                strncpy(sem, res + 1, L - 2);
-                sem[L-2] = '\0';
-                free(res);
-                res = sem;
-            }
+    if (res && wrap_final) {
+        size_t lr = strlen(res);
+        char *aux = (char*)malloc(lr + 3);
+        if (aux) {
+            aux[0] = '(';
+            memcpy(aux + 1, res, lr);
+            aux[lr+1] = ')';
+            aux[lr+2] = '\0';
+            free(res);
+            res = aux;
         }
     }
+
+     res = ajustar_parenteses_root(res);
 
     return res;
 }
 
-/* ---------- funções trig / log / sqrt aproximadas (float) ---------- */
-float grausParaRad(float g) { return g * PI_F / 180.0f; }
+float grausParaRad(float g){return g*PI_F/180.0f;}
 
-float senoAprox(float graus) {
-    float x = grausParaRad(graus);
-    float x2 = x * x;
-    float termo = x;
-    float soma = termo;
-    termo *= -x2 / (2.0f * 3.0f); soma += termo;
-    termo *= -x2 / (4.0f * 5.0f); soma += termo;
-    termo *= -x2 / (6.0f * 7.0f); soma += termo;
-    return soma;
-}
-
-float cossenoAprox(float graus) {
-    float x = grausParaRad(graus);
-    float x2 = x * x;
-    float termo = 1.0f;
-    float soma = termo;
-    termo *= -x2 / (1.0f * 2.0f); soma += termo;
-    termo *= -x2 / (3.0f * 4.0f); soma += termo;
-    termo *= -x2 / (5.0f * 6.0f); soma += termo;
-    return soma;
-}
-
-float tangenteAprox(float graus) {
-    float c = cossenoAprox(graus);
-    if (c == 0.0f) return 0.0f;
-    return senoAprox(graus) / c;
-}
-
-float raizAprox(float x) {
-    if (x <= 0.0f) return 0.0f;
-    float r = x;
-    int i;
-    for (i = 0; i < 20; ++i) r = 0.5f * (r + x / r);
-    return r;
-}
-
-float lnAprox(float x) {
-    if (x <= 0.0f) return 0.0f;
-    float y = (x - 1.0f) / (x + 1.0f);
-    float y2 = y * y;
-    float termo = y;
-    float soma = termo;
-    int n;
-    for (n = 1; n < 8; ++n) {
-        termo *= y2;
-        soma += termo / (2.0f * n + 1.0f);
-    }
-    return 2.0f * soma;
-}
-
-float log10Aprox(float x) {
-    const float LN10 = 2.302585092995f;
-    return lnAprox(x) / LN10;
-}
-
-float aplicarFuncaoUnaria(const char *func, float x) {
+/* Usar math.h para resultados mais precisos; entrada em graus para trig */
+float senoAprox(float graus){return sinf(grausParaRad(graus));}
+float cossenoAprox(float graus){return cosf(grausParaRad(graus));}
+float tangenteAprox(float graus){return tanf(grausParaRad(graus));}
+float raizAprox(float x){return (x<=0.0f)?0.0f:sqrtf(x);} 
+float lnAprox(float x){return (x<=0.0f)?0.0f:logf(x);} 
+float log10Aprox(float x){return (x<=0.0f)?0.0f:log10f(x);} 
+float aplicarFuncaoUnaria(const char *func, float x){
     if (!func) return 0.0f;
-    if (strcmp(func, "sen") == 0) return senoAprox(x);
-    if (strcmp(func, "cos") == 0) return cossenoAprox(x);
-    if (strcmp(func, "tg") == 0) return tangenteAprox(x);
-    if (strcmp(func, "log") == 0) return log10Aprox(x);
-    if (strcmp(func, "log10") == 0) return log10Aprox(x);
-    if (strcmp(func, "raiz") == 0) return raizAprox(x);
-    if (strcmp(func, "sqrt") == 0) return raizAprox(x);
+    if (strcmp(func,"sen")==0) return senoAprox(x);
+    if (strcmp(func,"cos")==0) return cossenoAprox(x);
+    if (strcmp(func,"tg")==0) return tangenteAprox(x);
+    if (strcmp(func,"log")==0) return log10Aprox(x);
+    if (strcmp(func,"log10")==0) return log10Aprox(x);
+    if (strcmp(func,"raiz")==0) return raizAprox(x);
+    if (strcmp(func,"sqrt")==0) return raizAprox(x);
     return 0.0f;
 }
-
-/* ---------- avaliação de posfixa (float) ---------- */
-float getValorPosFixa(char *expr) {
+float getValorPosFixa(char *expr){
     if (!expr) return 0.0f;
     PilhaFloat p;
     inicializarPilhaFloat(&p);
@@ -511,17 +596,9 @@ float getValorPosFixa(char *expr) {
     if (p.topo < 0) return 0.0f;
     return desempilharFloat(&p);
 }
-
-/* ---------- funções públicas exigidas pelo header ---------- */
-char *getFormaInFixa(char *Str) {
+char *getFormaInFixa(char *Str){
     return converterPosfixaParaInfixaInterna(Str);
-}
-char *infixaParaPosfixa(const char *infixa_raw) {
-    return infixaParaPosfixaInterna(infixa_raw);
-}
-
-/* ---------- processarExpressao pública (aloca *saida com malloc) ---------- */
-int processarExpressao(const char *entrada, char **saida, float *valor, int *ehPos) {
+}char *infixaParaPosfixa(const char *infixa_raw){return infixaParaPosfixaInterna(infixa_raw);}int processarExpressao(const char *entrada,char **saida,float *valor,int *ehPos){
     if (!entrada || !saida || !valor || !ehPos) return -1;
     *saida = NULL;
     *valor = 0.0f;
@@ -535,7 +612,7 @@ int processarExpressao(const char *entrada, char **saida, float *valor, int *ehP
         norm = normalizarInfixa(entrada);
         if (!norm) return -1;
     } else {
-        norm = strdup(entrada);
+        norm = minha_strdup(entrada);
         if (!norm) return -1;
     }
 
@@ -543,7 +620,7 @@ int processarExpressao(const char *entrada, char **saida, float *valor, int *ehP
     int ehPosFinal = detectarPosfixa(norm) ? 1 : 0;
     *ehPos = ehPosFinal;
 
-    if (ehPosFinal) {
+    if(ehPosFinal){
         /* entrada posfixa: converte para infixa legível e calcula */
         char *infixa = converterPosfixaParaInfixaInterna(norm);
         if (infixa) {
@@ -564,3 +641,5 @@ int processarExpressao(const char *entrada, char **saida, float *valor, int *ehP
         return 0;
     }
 }
+/* minha_strdup: implementação local de strdup */
+static char *minha_strdup(const char *s){if(!s)return NULL;size_t n=strlen(s);char*r=(char*)malloc(n+1);if(!r)return NULL;memcpy(r,s,n+1);return r;}

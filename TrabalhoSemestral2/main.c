@@ -49,7 +49,7 @@ int main() {
     testar("(6 / 2 + 3) * 4");
 
     testar("9 5 2 8 * 4 + * +");
-    testar("9 + (5 * (4 + 8 * 2))");
+    testar("9 + (5 * (2 * 8 + 4))");
 
     testar("2 3 + log 5 /");
     testar("log(2 + 3) / 5");
