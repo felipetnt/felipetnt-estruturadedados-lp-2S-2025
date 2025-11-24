@@ -1,70 +1,67 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include "expressao.h"
 
-char *converterInfixaParaPosfixa(char *infixa);
+// Protótipo real da função implementada no expressao.c
+int processarExpressao(const char *entrada, char **saida, float *valor, int *ehPos);
 
-int main(){
-    Expressao e;
-    int opc;
+void testar(const char *expr) {
+    char *saida = NULL;   // agora recebe malloc do processarExpressao
+    float valor = 0.0f;
+    int ehPos = 0;
 
-    printf("1 - Converter pos-fixa para infixa e calcular\n");
-    printf("2 - Converter infixa para pos-fixa e calcular\n");
-    scanf("%d",&opc);
-    getchar(); 
+    printf("\n===============================\n");
+    printf("Expressao de entrada: %s\n", expr);
 
-    if(opc==1){
-        printf("Digite pos-fixa:\n");
-        fgets(e.posFixa,512,stdin);
-        e.posFixa[strcspn(e.posFixa,"\n")] = 0;
+    if (processarExpressao(expr, &saida, &valor, &ehPos) == 0) {
 
-        char *inf = getFormaInFixa(e.posFixa);
-        if(!inf){
-            printf("Erro na conversao\n");
-            return 1;
+        if (ehPos) {
+            printf("Tipo detectado: POS-FIXA\n");
+            printf("Convertida para INFIXA: %s\n", saida);
+        } else {
+            printf("Tipo detectado: INFIXA\n");
+            printf("Convertida para POS-FIXA: %s\n", saida);
         }
 
-        strcpy(e.inFixa, inf);
-        free(inf);
-
-        e.Valor = getValorPosFixa(e.posFixa);
-
-        if(e.Valor != e.Valor){
-            printf("Erro na avaliacao\n");
-            return 1;
-        }
-
-        printf("Infixa: %s\nValor: %.6f\n", e.inFixa, e.Valor);
+        printf("Valor calculado: %.6f\n", valor);
+    } else {
+        printf("ERRO ao processar expressao!\n");
     }
 
-    else if(opc==2){
-        printf("Digite infixa:\n");
-        fgets(e.inFixa,512,stdin);
-        e.inFixa[strcspn(e.inFixa,"\n")] = 0;
+    if (saida) free(saida);  // libera o malloc feito dentro do expressao.c
+}
 
-        char *pos = converterInfixaParaPosfixa(e.inFixa);
-        if(!pos){
-            printf("Erro na conversao\n");
-            return 1;
-        }
+int main() {
 
-        strncpy(e.posFixa, pos, 512);
-        free(pos);
+    // ======= TESTES QUE VOCÊ PEDIU =======
 
-        e.Valor = getValorPosFixa(e.posFixa);
+    testar("3 4 + 5 *");
+    testar("(3 + 4) * 5");
 
-        if(e.Valor != e.Valor){
-            printf("Erro na avaliacao\n");
-            return 1;
-        }
+    testar("7 2 * 4 +");
+    testar("7 * 2 + 4");
 
-        printf("Pos-fixa: %s\nValor: %.6f\n", e.posFixa, e.Valor);
-    }
+    testar("8 5 2 4 + * +");
+    testar("8 + (5 * (2 + 4))");
 
-    else {
-        printf("Opcao invalida\n");
-    }
+    testar("6 2 / 3 + 4 *");
+    testar("(6 / 2 + 3) * 4");
+
+    testar("9 5 2 8 * 4 + * +");
+    testar("9 + (5 * (4 + 8 * 2))");
+
+    testar("2 3 + log 5 /");
+    testar("log(2 + 3) / 5");
+
+    testar("10 log 3 ^ 2 +");
+    testar("(log(10)) ^ 3 + 2");
+
+    testar("45 60 + 30 cos *");
+    testar("(45 + 60) * cos(30)");
+
+    testar("0.5 45 sen 2 ^ +");
+    testar("sen(45) ^ 2 + 0.5");
 
     return 0;
 }
